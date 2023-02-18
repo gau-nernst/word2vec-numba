@@ -3,7 +3,7 @@ from functools import partial
 import numba as nb
 import numpy as np
 
-from word2vec import numba_logsigmoid, numba_sample, numba_sigmoid, skipgram_negative_sampling
+from word2vec import numba_logsigmoid, numba_sample, numba_sigmoid, skipgram_negative_sampling_step
 
 
 def _check_ufunc_dtype(func):
@@ -46,7 +46,9 @@ def test_numba_sample():
     p /= p.sum()
     cdf = np.cumsum(p)
 
-    assert np.allclose(np.random.choice(N, size=N, p=p), numba_sample(cdf, N))
+    np_samples = np.random.choice(N, size=N, p=p)
+    nb_samples = numba_sample(cdf, N, np.empty(N, dtype=np.uint32))
+    assert np.allclose(np_samples, nb_samples)
 
 
 def grad_check(func, eps=1e-4):
@@ -65,12 +67,13 @@ def test_skipgram_negative_sampling_grad():
     target_indices = np.array([1, 2, 3])
 
     func = partial(
-        skipgram_negative_sampling,
+        skipgram_negative_sampling_step,
         input_embs,
         output_embs,
         context_idx,
         target_indices,
         return_loss=True,
+        return_grad=True,
     )
 
     for j in range(emb_dim):
@@ -93,3 +96,16 @@ def test_skipgram_negative_sampling_grad():
                 return loss, grad_outputs[i, j]
 
             grad_check(wrapper)
+
+    input_before = input_embs[context_idx].copy()
+    outputs_before = output_embs[target_indices].copy()
+    _, grad_input, grad_outputs = skipgram_negative_sampling_step(
+        input_embs, output_embs, context_idx, target_indices, lr=0.025, update=True, return_grad=True
+    )
+    assert not np.allclose(input_before, input_embs[context_idx])
+    input_after = input_before - grad_input * 0.025
+    assert np.allclose(input_after, input_embs[context_idx])
+
+    assert not np.allclose(outputs_before, output_embs[target_indices])
+    outputs_after = outputs_before - grad_outputs * 0.025
+    assert np.allclose(outputs_after, output_embs[target_indices])
