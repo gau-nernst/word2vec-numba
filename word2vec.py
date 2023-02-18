@@ -37,31 +37,30 @@ def numba_sample(cdf, size):
 def skipgram_negative_sampling(
     input_embs: np.ndarray,
     output_embs: np.ndarray,
-    target_idx: int,
-    context_indices: np.ndarray,
-    labels: np.ndarray,
+    context_idx: np.ndarray,
+    target_indices: np.ndarray,
     lr: float = 0.01,
     update: bool = False,
     return_loss: bool = False,
 ):
     # context predicts target, following Google's Word2Vec C code
-    n_context = context_indices.shape[0]
-    context_embs = input_embs[context_indices]
-    target_emb = output_embs[target_idx]
-    z = context_embs @ target_emb  # (n_context,)
+    context_emb = input_embs[context_idx]
+    target_embs = output_embs[target_indices]
 
-    grad_z = (numba_sigmoid(z) - labels) / n_context
-    grad_inputs = grad_z.reshape(-1, 1) * target_emb.reshape(1, -1)
-    grad_output = grad_z @ context_embs
+    z = target_embs @ context_emb
+    grad_z = numba_sigmoid(z)
+    grad_z[0] -= 1
+
+    grad_input = grad_z @ target_embs
+    grad_outputs = grad_z.reshape(-1, 1) * context_emb.reshape(1, -1)
 
     if update:
-        for i in range(n_context):
-            input_embs[context_indices[i]] -= grad_inputs[i] * lr
-        output_embs[target_idx] -= grad_output * lr
+        input_embs[context_idx] -= grad_input * lr
+        for i in range(target_indices.shape[0]):
+            output_embs[target_indices[i]] -= grad_outputs[i] * lr
 
     loss = None
     if return_loss:
-        loss = -labels * numba_logsigmoid(z) - (1 - labels) * numba_logsigmoid(-z)
-        loss = loss.mean()
+        loss = -numba_logsigmoid(z[0]) - numba_logsigmoid(-z[1:]).sum()
 
-    return loss, grad_inputs, grad_output
+    return loss, grad_input, grad_outputs
