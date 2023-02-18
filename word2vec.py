@@ -1,4 +1,4 @@
-from time import time
+import time
 
 import numba as nb
 import numpy as np
