@@ -13,6 +13,26 @@ def numba_logsigmoid(x):
     return -np.log(1 + np.exp(-x)) if x >= 0 else x - np.log(1 + np.exp(x))
 
 
+@nb.njit("uint32(float64[:], float64)")
+def numba_bisect_left(arr, x):
+    lo, hi = 0, arr.shape[0]
+    while hi > lo:
+        mid = (lo + hi) >> 1
+        if arr[mid] >= x:
+            hi = mid
+        else:
+            lo = mid + 1
+    return lo
+
+
+@nb.njit("uint32[:](float64[:], uint64)")
+def numba_sample(cdf, size):
+    out = np.empty(size, dtype=np.uint32)
+    for i in range(size):
+        out[i] = numba_bisect_left(cdf, np.random.rand())
+    return out
+
+
 @njit
 def skipgram_negative_sampling(
     input_embs: np.ndarray,
