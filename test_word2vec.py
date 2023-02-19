@@ -1,9 +1,8 @@
 from functools import partial
 
-import numba as nb
 import numpy as np
 
-from word2vec import numba_logsigmoid, numba_sample, numba_sigmoid, skipgram_negative_sampling_step
+from word2vec import binary_cross_entropy, numba_logsigmoid, numba_sigmoid
 
 
 def _check_ufunc_dtype(func):
@@ -37,20 +36,6 @@ def test_numba_logsigmoid():
     assert numba_logsigmoid(x).shape == x.shape
 
 
-def test_numba_sample():
-    np.random.seed(0)
-    nb.njit(lambda x: np.random.seed(x))(0)
-
-    N = 10
-    p = np.arange(N) / N
-    p /= p.sum()
-    cdf = np.cumsum(p)
-
-    np_samples = np.random.choice(N, size=N, p=p)
-    nb_samples = numba_sample(cdf, N, np.empty(N, dtype=np.uint32))
-    assert np.allclose(np_samples, nb_samples)
-
-
 def grad_check(func, eps=1e-4):
     _, grad = func(0)
     loss_left, _ = func(-eps)
@@ -61,51 +46,16 @@ def grad_check(func, eps=1e-4):
 
 def test_skipgram_negative_sampling_grad():
     emb_dim = 10
-    input_embs = np.random.randn(4, emb_dim)
-    output_embs = np.random.randn(4, emb_dim)
-    context_idx = 0
-    target_indices = np.array([1, 2, 3])
+    embs = np.random.randn(2, emb_dim)
 
-    func = partial(
-        skipgram_negative_sampling_step,
-        input_embs,
-        output_embs,
-        context_idx,
-        target_indices,
-        return_loss=True,
-        return_grad=True,
-    )
+    def wrapper(x, row_idx, col_idx, label):
+        grad_embs = np.zeros((2, emb_dim))
+        embs[row_idx, col_idx] += x
+        loss = binary_cross_entropy(embs[0], embs[1], label, grad_embs[0], grad_embs[1], 1.0, True)
+        embs[row_idx, col_idx] -= x
+        return loss, -grad_embs[row_idx, col_idx]
 
-    for j in range(emb_dim):
-
-        def wrapper(x):
-            input_embs[context_idx, j] += x
-            loss, grad_input, _ = func()
-            input_embs[context_idx, j] -= x
-            return loss, grad_input[j]
-
-        grad_check(wrapper)
-
-    for i, target_idx in enumerate(target_indices):
-        for j in range(emb_dim):
-
-            def wrapper(x):
-                output_embs[target_idx, j] += x
-                loss, _, grad_outputs = func()
-                output_embs[target_idx, j] -= x
-                return loss, grad_outputs[i, j]
-
-            grad_check(wrapper)
-
-    input_before = input_embs[context_idx].copy()
-    outputs_before = output_embs[target_indices].copy()
-    _, grad_input, grad_outputs = skipgram_negative_sampling_step(
-        input_embs, output_embs, context_idx, target_indices, lr=0.025, update=True, return_grad=True
-    )
-    assert not np.allclose(input_before, input_embs[context_idx])
-    input_after = input_before - grad_input * 0.025
-    assert np.allclose(input_after, input_embs[context_idx])
-
-    assert not np.allclose(outputs_before, output_embs[target_indices])
-    outputs_after = outputs_before - grad_outputs * 0.025
-    assert np.allclose(outputs_after, output_embs[target_indices])
+    for row_idx in range(2):
+        for label in (0.0, 1.0):
+            for col_idx in range(emb_dim):
+                grad_check(partial(wrapper, row_idx=row_idx, col_idx=col_idx, label=label))
