@@ -27,7 +27,7 @@ def numba_bisect_left(arr, x):
 
 
 @nb.njit(["(float32,float32[:],float32[:])", "(float64,float64[:],float64[:])"])
-def saxpy(a, x, y):
+def axpy(a, x, y):
     for i in range(x.shape[0]):
         y[i] += a * x[i]
 
@@ -36,9 +36,9 @@ def saxpy(a, x, y):
 def binary_cross_entropy(in_emb, out_emb, label, grad_in_emb, grad_out_emb, lr, return_loss):
     z = np.vdot(in_emb, out_emb)
     g = (label - numba_sigmoid(z)) * lr  # this is -dloss / dz * lr
-    saxpy(g, out_emb, grad_in_emb)
-    saxpy(g, in_emb, grad_out_emb)
-    return -label * numba_logsigmoid(z) - (1 - label) * numba_logsigmoid(-z) if return_loss else 0
+    axpy(g, out_emb, grad_in_emb)
+    axpy(g, in_emb, grad_out_emb)
+    return -label * numba_logsigmoid(z) - (1 - label) * numba_logsigmoid(-z) if return_loss else 0.0
 
 
 @nb.njit
@@ -56,7 +56,7 @@ def skipgram_negative_sampling_step(input_embs, output_embs, in_idx, out_idx, no
         out_emb = output_embs[noise_idx]
         loss += binary_cross_entropy(in_emb, out_emb, 0.0, grad_in_emb, out_emb, lr, return_loss)
 
-    saxpy(1.0, grad_in_emb, in_emb)
+    axpy(1.0, grad_in_emb, in_emb)
     return loss
 
 
