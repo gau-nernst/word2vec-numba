@@ -14,7 +14,7 @@ def numba_logsigmoid(x):
     return -np.log(1 + np.exp(-x)) if x >= 0 else x - np.log(1 + np.exp(x))
 
 
-@nb.njit("uint32(float64[:], float64)")
+@nb.njit("int32(float64[::1], float64)")
 def numba_bisect_left(arr, x):
     lo, hi = 0, arr.shape[0]
     while hi > lo:
@@ -26,7 +26,7 @@ def numba_bisect_left(arr, x):
     return lo
 
 
-@nb.njit(["(float32,float32[:],float32[:])", "(float64,float64[:],float64[:])"])
+@nb.njit(["(float32,float32[::1],float32[::1])", "(float64,float64[::1],float64[::1])"])
 def axpy(a, x, y):
     for i in range(x.shape[0]):
         y[i] += a * x[i]
@@ -95,8 +95,8 @@ def skipgram_negative_sampling_train(
             loss = skipgram_negative_sampling_step(
                 input_embs,
                 output_embs,
-                stream[window_idx],
-                stream[stream_pos],
+                stream[window_idx],  # context word
+                stream[stream_pos],  # center word
                 noise_cdf,
                 negative,
                 current_lr,
