@@ -14,3 +14,6 @@ References:
 - Google C code (and Gensim) uses lookup table to compute sigmoid (and log-sigmoid).
 - Numba likes for loops and in-place operations. Allocating new memory is pretty expensive, especially for intermediate/temporary results.
 - We can call scipy's BLAS inside numba functions. saxpy can be used to speed up SGD update (Gensim approach, but with Cython). Although scipy's saxpy is faster than naive for-loop implementations, when used in conjunction with the whole training script, scipy's saxpy is a bit slower. Not very sure why. (profiling numba is not easy...)
+- For small, simple jit functions, it's a good practice to add type annotation. This ensures the input and return values have the correct data types that you want. Sometimes, it is also faster.
+- When adding type annotations for numba, remember to use `[::1]` (C layout) instead of `[:]` (any layout) for arrays. It gives a huge speed boost. One reason is perhaps numba will only SIMD for contiguous memory.
+- Numba type annotation does not play well with default arguments. If you need default arguments, it's best not to add type annotations.
