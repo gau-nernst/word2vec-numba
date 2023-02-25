@@ -1,8 +1,13 @@
+import logging
+
 import numba as nb
 import numpy as np
 
 
-@nb.vectorize(["float32(float32)", "float64(float64)"], nopython=True)
+LOGGER = logging.getLogger(__name__)
+
+
+@nb.vectorize(["float32(float32)", "float64(float64)"], nopython=True, fastmath=True)
 def numba_sigmoid(x):
     return 1 / (1 + np.exp(-x)) if x >= 0 else 1 - 1 / (1 + np.exp(x))
 
@@ -40,10 +45,10 @@ def binary_cross_entropy(in_emb, out_emb, label, grad_in_emb, grad_out_emb, lr, 
 
 
 @nb.njit
-def skipgram_negative_sampling_step(input_embs, output_embs, in_idx, out_idx, noise_cdf, negative, lr, grad_in_emb):
-    grad_in_emb[:] = 0.0
+def skipgram_ns_step(input_embs, output_embs, in_idx, out_idx, noise_cdf, negative, lr):
     in_emb = input_embs[in_idx]  # this is a view
     out_emb = output_embs[out_idx]
+    grad_in_emb = np.zeros_like(in_emb)
 
     # accumulate gradients for in_emb. directly update out_emb
     binary_cross_entropy(in_emb, out_emb, 1.0, grad_in_emb, out_emb, lr)
@@ -57,22 +62,9 @@ def skipgram_negative_sampling_step(input_embs, output_embs, in_idx, out_idx, no
     axpy(1.0, grad_in_emb, in_emb)
 
 
-@nb.njit(nogil=True)
-def skipgram_negative_sampling_train(
-    stream: np.ndarray,
-    input_embs: np.ndarray,
-    output_embs: np.ndarray,
-    noise_cdf: np.ndarray,
-    window_size: int = 10,
-    negative: int = 5,
-    max_lr: float = 0.025,
-    min_lr: float = 0.0,
-):
-    delta_lr = (max_lr - min_lr) / stream.shape[0]
-    grad_in_emb = np.empty(input_embs.shape[1], dtype=input_embs.dtype)  # allocate re-usable temp memory
-
-    for stream_pos in range(stream.shape[0]):
-        lr = max_lr - delta_lr * stream_pos
+@nb.njit(parallel=True)
+def skipgram_ns_batch(stream, input_embs, output_embs, noise_cdf, window_size, negative, lr):
+    for stream_pos in nb.prange(stream.shape[0]):
         truncated_window_size = np.random.randint(window_size) + 1
         window_start = max(stream_pos - truncated_window_size, 0)
         window_end = min(stream_pos + truncated_window_size + 1, stream.shape[0])
@@ -82,7 +74,7 @@ def skipgram_negative_sampling_train(
                 continue
 
             # NOTE: context predicts target, following Google's Word2Vec C code
-            skipgram_negative_sampling_step(
+            skipgram_ns_step(
                 input_embs,
                 output_embs,
                 stream[window_idx],  # context word
@@ -90,5 +82,65 @@ def skipgram_negative_sampling_train(
                 noise_cdf,
                 negative,
                 lr,
-                grad_in_emb,
             )
+
+
+def train_word2vec(
+    filename: str,
+    emb_dim: int,
+    window_size: int = 5,
+    negative: int = 5,
+    lr: float = 0.025,
+    min_count: int = 5,
+    batch_size: int = 10_000,
+    n_workers: int = 1,
+):
+    token_ids, vocab, noise_cdf = prepare_data(filename, min_count)
+    n_tokens = token_ids.shape[0]
+    n_vocab = len(vocab)
+    LOGGER.info(f"Number of tokens: {n_tokens:,}")
+    LOGGER.info(f"Vocabulary size: {n_vocab:,}")
+
+    embs_shape = (n_vocab, emb_dim)
+    rng = np.random.default_rng()
+    input_embs = (rng.random(embs_shape, dtype=np.float32) - 0.5) / emb_dim
+    output_embs = np.zeros(embs_shape, dtype=np.float32)
+
+    nb.set_num_threads(n_workers)
+    i = 0
+    while i < n_tokens:
+        batch = token_ids[i : min(i + batch_size, n_tokens)]
+        _lr = lr * (1 - i / n_tokens)
+        skipgram_ns_batch(batch, input_embs, output_embs, noise_cdf, window_size, negative, _lr)
+        i += batch_size
+
+    return input_embs, vocab
+
+
+def prepare_data(filename: str, min_count: int):
+    def tokens_from_file(filename):
+        with open(filename) as f:
+            for line in f:
+                for token in line.split():
+                    yield token
+
+    vocab = dict()
+    for token in tokens_from_file(filename):
+        vocab[token] = vocab.get(token, 0) + 1
+    vocab = {k: v for k, v in vocab.items() if v >= min_count}
+    token_to_id = {k: idx for idx, k in enumerate(vocab.keys())}
+
+    noise_cdf = np.empty(len(vocab))
+    for i, count in enumerate(vocab.values()):
+        noise_cdf[i] = count * 0.75
+    noise_cdf /= noise_cdf.sum()
+    np.cumsum(noise_cdf, out=noise_cdf)
+
+    token_ids = np.empty(sum(vocab.values()), dtype=np.uint32)
+    i = 0
+    for token in tokens_from_file(filename):
+        if token in token_to_id:
+            token_ids[i] = token_to_id[token]
+            i += 1
+
+    return token_ids, list(vocab.keys()), noise_cdf
