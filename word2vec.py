@@ -1,4 +1,6 @@
 import logging
+import queue
+import threading
 
 import numba as nb
 import numpy as np
@@ -63,23 +65,31 @@ def skipgram_ns_step(input_embs, output_embs, in_idx, out_idx, noise_cdf, negati
     axpy(1.0, grad_in_emb, in_emb)
 
 
-@nb.njit(parallel=True)
-def skipgram_ns_batch(stream, input_embs, output_embs, noise_cdf, window_size, negative, lr):
-    for stream_pos in nb.prange(stream.shape[0]):
+@nb.njit(nogil=True)
+def skipgram_ns_batch(stream, input_embs, output_embs, noise_cdf, subsample_probs, window_size, negative, lr):
+    subsampled = np.empty_like(stream)
+    subsampled_idx = 0
+    for token in stream:
+        if subsample_probs[token] < np.random.rand():
+            continue
+        subsampled[subsampled_idx] = token
+        subsampled_idx += 1
+
+    for center_idx in range(subsampled_idx):
         truncated_window_size = np.random.randint(window_size) + 1
-        window_start = max(stream_pos - truncated_window_size, 0)
-        window_end = min(stream_pos + truncated_window_size + 1, stream.shape[0])
+        window_start = max(center_idx - truncated_window_size, 0)
+        window_end = min(center_idx + truncated_window_size + 1, subsampled_idx)
 
         for window_idx in range(window_start, window_end):
-            if window_idx == stream_pos:
+            if window_idx == center_idx:
                 continue
 
             # NOTE: context predicts target, following Google's Word2Vec C code
             skipgram_ns_step(
                 input_embs,
                 output_embs,
-                stream[window_idx],  # context word
-                stream[stream_pos],  # center word
+                subsampled[window_idx],  # context word
+                subsampled[center_idx],  # center word
                 noise_cdf,
                 negative,
                 lr,
@@ -93,12 +103,13 @@ def train_word2vec(
     negative: int = 5,
     lr: float = 0.025,
     min_count: int = 5,
+    subsample: float = 1e-3,
     batch_size: int = 10_000,
     n_epochs: int = 1,
     n_workers: int = 1,
     progress_bar: bool = True,
 ):
-    token_ids, vocab, noise_cdf = prepare_data(filename, min_count)
+    token_ids, vocab, noise_cdf, subsample_probs = prepare_data(filename, min_count, subsample)
     n_tokens = token_ids.shape[0]
     n_vocab = len(vocab)
     LOGGER.info(f"Number of tokens: {n_tokens:,}")
@@ -109,21 +120,34 @@ def train_word2vec(
     input_embs = (rng.random(embs_shape, dtype=np.float32) - 0.5) / emb_dim
     output_embs = np.zeros(embs_shape, dtype=np.float32)
 
-    nb.set_num_threads(n_workers)
+    q = queue.Queue(n_workers * 2)
     pbar = tqdm(total=n_epochs * n_tokens, disable=not progress_bar)
+
+    def worker():
+        args = (input_embs, output_embs, noise_cdf, subsample_probs, window_size, negative)
+        while True:
+            batch, lr = q.get()
+            skipgram_ns_batch(batch, *args, lr)
+            q.task_done()
+
+    for _ in range(n_workers):
+        threading.Thread(target=worker, daemon=True).start()
+
     for _ in range(n_epochs):
         i = 0
         while i < n_tokens:
             batch = token_ids[i : min(i + batch_size, n_tokens)]
             _lr = lr * (1 - i / n_tokens)
-            skipgram_ns_batch(batch, input_embs, output_embs, noise_cdf, window_size, negative, _lr)
+            q.put((batch, _lr))
             i += len(batch)
             pbar.update(len(batch))
 
+    q.join()
+    pbar.close()
     return input_embs, vocab
 
 
-def prepare_data(filename: str, min_count: int):
+def prepare_data(filename: str, min_count: int, subsample: float):
     def tokens_from_file(filename):
         with open(filename) as f:
             for line in f:
@@ -135,6 +159,7 @@ def prepare_data(filename: str, min_count: int):
         vocab[token] = vocab.get(token, 0) + 1
     vocab = {k: v for k, v in vocab.items() if v >= min_count}
     token_to_id = {k: idx for idx, k in enumerate(vocab.keys())}
+    n_tokens = sum(vocab.values())
 
     noise_cdf = np.empty(len(vocab))
     for i, count in enumerate(vocab.values()):
@@ -142,11 +167,17 @@ def prepare_data(filename: str, min_count: int):
     noise_cdf /= noise_cdf.sum()
     np.cumsum(noise_cdf, out=noise_cdf)
 
-    token_ids = np.empty(sum(vocab.values()), dtype=np.uint32)
+    subsample_probs = np.empty(len(vocab))
+    threshold = subsample * n_tokens
+    for i, count in enumerate(vocab.values()):
+        ratio = threshold / count
+        subsample_probs[i] = ratio**0.5 + ratio
+
+    token_ids = np.empty(n_tokens, dtype=np.uint32)
     i = 0
     for token in tokens_from_file(filename):
         if token in token_to_id:
             token_ids[i] = token_to_id[token]
             i += 1
 
-    return token_ids, list(vocab.keys()), noise_cdf
+    return token_ids, list(vocab.keys()), noise_cdf, subsample_probs
