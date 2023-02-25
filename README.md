@@ -20,6 +20,43 @@ Thread count | 1 | 2 | 4
 This (tokens/s) | 116,859 | 240,516 | 446,646
 Gensim (tokens/s) | 145,142 | 281,340 | 517,985
 
+## Set up environment
+
+```bash
+conda create -n word2vec python=3.10
+conda activate word2vec
+conda install numpy scipy numba tqdm
+```
+
+## Basic usage
+
+```python
+import numpy as np
+
+from word2vec import train_word2vec
+
+embs, vocab = train_word2vec("text8", 100, batch_size=10_000, n_workers=4)
+
+np.save("embs.npy", embs)
+with open("vocab.txt", "w") as f:
+    for token in vocab:
+        f.write(token + "\n")
+```
+
+Only text file input is supported. Next line character (`\n`) is treated as white space instead of sentence separator. This is to keep the code simple.
+
+## About Word2Vec
+
+There are 2 models for Word2Vec: continuous-bag-of-words (CBOW) or skip-gram. To train either type of Word2Vec, we can use hierarchical softmax or negative sampling loss. I only implement skip-gram + negative sampling loss combination.
+
+Negative sampling loss is a modified version of noise-contrastive-estimation (NCE). Instead of learning a particular distribution function directly (i.e. multi-class classification), NCE proposes learning a Bernoulli distribution (i.e. binary classification): given a mixture of the original distribution and a noise distribution, what is the probability that a sample comes from the original distribution. Since Word2Vec does not care about the actual skip-gram distribution, the probability mentioned previously is modelled directly by the inner product between two word vectors.
+
+The loss function is simply binary cross entropy. The loss function (and its back-propagation) can be implemented in fewer than 10 lines. The challenging part is to implement the **sampling** logic.
+
+- Frequent words sub-sampling: For words appearing more than 0.1% of the time, there is a non-zero probability that the word will be **removed** from the text. This also means that the surrounding words will have larger context while excluding the removed word.
+- Skip-gram sampling: For each word, we sample skip-grams `(word, context_word)` for all `context_word`s within the context window.
+- Negative sampling: These are samples from the **noise distribution**. Word2Vec uses unigram global distribution raised to the power of 0.75.
+
 ## Learnings
 
 - Although Word2Vec paper describes skip-gram as center word predicts context words, Google C code actually use each context word to predict center word. Most online resources seem to not be aware of this. FastText documentation describes skip-gram as context word predicts center word. The overall objective is still the same though, since if (A, B) is a skip-gram, (B, A) will also be a skip-gram. However, since Word2Vec uses stochastic gradient descent with batch size = negative + 1, there will probably be some differences.
