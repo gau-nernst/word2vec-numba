@@ -8,6 +8,19 @@ References:
 - https://github.com/RaRe-Technologies/gensim/blob/develop/gensim/models/word2vec_inner.pyx
 - https://web.stanford.edu/class/cs224n/
 
+Features:
+
+- Only skip-gram negative sampling is implemented
+- Multi-threading
+
+On Macbook Air M1 (plugged in), 1 pass over text8 dataset (~17M tokens), embedding size 128, negative sampling 5, window size 5, exclude data pre-processing time.
+
+Thread count | 1 | 2 | 4
+-------------|---|---|---
+Time | 2min 17s | 1min 12s | 37s
+
+TODO: compare against gensim
+
 ## Learnings
 
 - Although Word2Vec paper describes skip-gram as center word predicts context words, Google C code actually use each context word to predict center word. Most online resources seem to not be aware of this. FastText documentation describes skip-gram as context word predicts center word. The overall objective is still the same though, since if (A, B) is a skip-gram, (B, A) will also be a skip-gram. However, since Word2Vec uses stochastic gradient descent with batch size = negative + 1, there will probably be some differences.
