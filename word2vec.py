@@ -2,6 +2,7 @@ import logging
 
 import numba as nb
 import numpy as np
+from tqdm import tqdm
 
 
 LOGGER = logging.getLogger(__name__)
@@ -93,7 +94,9 @@ def train_word2vec(
     lr: float = 0.025,
     min_count: int = 5,
     batch_size: int = 10_000,
+    n_epochs: int = 1,
     n_workers: int = 1,
+    progress_bar: bool = True,
 ):
     token_ids, vocab, noise_cdf = prepare_data(filename, min_count)
     n_tokens = token_ids.shape[0]
@@ -107,12 +110,15 @@ def train_word2vec(
     output_embs = np.zeros(embs_shape, dtype=np.float32)
 
     nb.set_num_threads(n_workers)
-    i = 0
-    while i < n_tokens:
-        batch = token_ids[i : min(i + batch_size, n_tokens)]
-        _lr = lr * (1 - i / n_tokens)
-        skipgram_ns_batch(batch, input_embs, output_embs, noise_cdf, window_size, negative, _lr)
-        i += batch_size
+    pbar = tqdm(total=n_epochs * n_tokens, disable=not progress_bar)
+    for _ in range(n_epochs):
+        i = 0
+        while i < n_tokens:
+            batch = token_ids[i : min(i + batch_size, n_tokens)]
+            _lr = lr * (1 - i / n_tokens)
+            skipgram_ns_batch(batch, input_embs, output_embs, noise_cdf, window_size, negative, _lr)
+            i += len(batch)
+            pbar.update(len(batch))
 
     return input_embs, vocab
 
