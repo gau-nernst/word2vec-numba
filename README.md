@@ -13,13 +13,14 @@ Features:
 - Only skip-gram negative sampling is implemented
 - Multi-threading
 
-On Macbook Air M1 (plugged in), 1 pass over text8 dataset (~17M tokens), embedding size 128, negative sampling 5, window size 5, exclude data pre-processing time.
+On Macbook Air M1 (plugged in), 1 pass over text8 dataset (~17M tokens), embedding size 100, negative sampling 5, window size 5.
 
 Thread count | 1 | 2 | 4
 -------------|---|---|---
-Time | 2min 17s | 1min 12s | 37s
+This (tokens/s) | 123,843 | 242,302 | 464,412
+Gensim (tokens/s) | 145,142 | 281,340 | 517,985
 
-TODO: compare against gensim
+NOTE: Gensim throughput is reported by looking at their info logging. I'm not familiar with gensim internals. It seems like they do some trimming of the sentences (fewer tokens in total) so measuring training time is not accurate for comparison.
 
 ## Learnings
 
