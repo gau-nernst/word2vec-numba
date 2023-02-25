@@ -136,8 +136,8 @@ def train_word2vec(
     for _ in range(n_epochs):
         i = 0
         while i < n_tokens:
+            _lr = lr * (1 - (i - i % (n_workers * batch_size)) / n_tokens)  # same lr for concurrent threads
             batch = token_ids[i : min(i + batch_size, n_tokens)]
-            _lr = lr * (1 - i / n_tokens)
             q.put((batch, _lr))
             i += len(batch)
             pbar.update(len(batch))
